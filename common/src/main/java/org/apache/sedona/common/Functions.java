@@ -32,6 +32,7 @@ import org.apache.sedona.common.geometryObjects.Circle;
 import org.apache.sedona.common.geometryObjects.Geography;
 import org.apache.sedona.common.sphere.Spheroid;
 import org.apache.sedona.common.subDivide.GeometrySubDivider;
+import org.apache.sedona.common.segmentize.GeometrySegmentizer;
 import org.apache.sedona.common.utils.*;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.algorithm.MinimumBoundingCircle;
@@ -1870,6 +1871,10 @@ public class Functions {
       throw new IllegalArgumentException("ST_Subdivide needs 5 or more max vertices");
     }
     return GeometrySubDivider.subDivide(geometry, maxVertices);
+  }
+
+  public static Geometry[] segmentize(Geometry geometry, double maxSegmentLength) {
+    return GeometrySegmentizer.segmentize(geometry, maxSegmentLength);
   }
 
   public static Geometry snap(Geometry input, Geometry reference, double tolerance) {

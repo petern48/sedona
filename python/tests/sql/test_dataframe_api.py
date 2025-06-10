@@ -1027,6 +1027,13 @@ test_configurations = [
         ["LINESTRING (0 0, 2.5 0)", "LINESTRING (2.5 0, 5 0)"],
     ),
     (
+        stf.ST_Segmentize,
+        ("line", 1),
+        "linestring_geom",
+        "",
+        ["LINESTRING (0 0, 1 0)", "LINESTRING (1 0, 2 0)", "LINESTRING (2 0, 3 0)", "LINESTRING (3 0, 4 0)", "LINESTRING (4 0, 5 0)"],
+    ),
+    (
         stf.ST_SymDifference,
         ("a", "b"),
         "overlapping_polys",

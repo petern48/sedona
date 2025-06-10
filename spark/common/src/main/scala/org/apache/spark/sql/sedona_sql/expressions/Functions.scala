@@ -1006,6 +1006,14 @@ case class ST_SubDivideExplode(children: Seq[Expression]) extends Generator with
   }
 }
 
+case class ST_Segmentize(inputExpressions: Seq[Expression])  // TODO
+    extends InferredExpression(Functions.segmentize _) {
+
+  protected def withNewChildrenInternal(newChildren: IndexedSeq[Expression]) = {
+    copy(inputExpressions = newChildren)
+  }
+}
+
 case class ST_MakeLine(inputExpressions: Seq[Expression])
     extends InferredExpression(
       inferrableFunction2(Functions.makeLine),

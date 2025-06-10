@@ -1568,6 +1568,31 @@ class TestPredicateJoin(TestBase):
         # Then
         assert subdivided.count() == 16
 
+    # def test_st_segmentize(self):
+    #     # Given
+    #     tests = [
+    #         ("LINESTRING (0 0, 60 60)", 2000000)
+    #         ("POLYGON ((0 0, 0 8, 30 0, 0 0))", 10)
+    #     ]
+    #     geometry_df = self.__wkt_list_to_data_frame(
+    #         [
+    #             # "POINT(21 52)",
+    #             "POLYGON ((0 0, 0 8, 30 0, 0 0))",
+    #             # "LINESTRING (0 0, 1 1, 2 2)",
+    #         ]
+    #     )
+    #     geometry_df.createOrReplaceTempView("geometry")
+
+    #     # When
+    #     subdivided = geometry_df.select(expr("st_Segmentize(geom, 10)"))
+
+    #     # Then
+    #     assert subdivided.count() == 3
+
+    #     assert (
+    #         sum([geometries[0].__len__() for geometries in subdivided.collect()]) == 16
+    #     )
+
     def test_st_has_z(self):
         baseDf = self.spark.sql(
             "SELECT ST_GeomFromWKT('POLYGON Z ((30 10 5, 40 40 10, 20 40 15, 10 20 20, 30 10 5))') as poly"
