@@ -20,7 +20,7 @@ name: Python build
 on:
   push:
     branches:
-      - master
+      - '**'
     paths:
       - 'common/**'
       - 'spark/**'
@@ -58,6 +58,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
         include:
           - spark: '4.0.0'
@@ -190,3 +191,6 @@ jobs:
           source ${VENV_PATH}/bin/activate
           pip install "pyspark[connect]==${SPARK_VERSION}"
           pytest -v tests/sql/test_dataframe_api.py
+      - name: Debug with tmate on failure
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3
