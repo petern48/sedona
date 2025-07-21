@@ -39,10 +39,13 @@ from sedona.geopandas.base import GeoFrame
 from sedona.geopandas.geodataframe import GeoDataFrame
 from sedona.geopandas.sindex import SpatialIndex
 from packaging.version import parse as parse_version
+from pyspark.pandas.internal import InternalField
+from pyspark.sql.types import DataType
 
 from pyspark.pandas.internal import (
     SPARK_DEFAULT_INDEX_NAME,  # __index_level_0__
     NATURAL_ORDER_COLUMN_NAME,
+    SPARK_DEFAULT_SERIES_NAME,  # '0'
 )
 
 
@@ -431,23 +434,39 @@ class GeoSeries(GeoFrame, pspd.Series):
                     fastpath=fastpath,
                 )
 
+            # Spark errors if it's left as a geometry type
+            # pd_series = gpd.GeoSeries(pd_series)
+            # pd_series = pd_series.astype(object)
+
             # initialize the parent class pyspark Series with the pandas Series
             super().__init__(data=pd_series)
 
         # Ensure we're storing geometry types
+        # col = self._col_label[0]  # TODO:
+        # col = self.spark.column
+        # col = self.name
+        # This is wrong. need to fix this now
+        # col = self._column_label[0]
         col = next(
             field.name
             for field in self._internal.spark_frame.schema.fields
             if field.name not in (NATURAL_ORDER_COLUMN_NAME, SPARK_DEFAULT_INDEX_NAME)
         )
-        datatype = self._internal.spark_frame.schema[col].dataType
+        print("series.name", self.name)
+        col = self._get_col_name()
+
+        # datatype = self._internal.spark_frame.schema[col].dataType
+
+        datatype = self._get_data_type(col)
+
+        # print("geoseries.__init__ datatype: ", datatype)
         # Empty lists input will lead to NullType(), so we convert to GeometryType()
         if datatype == NullType():
             self._internal.spark_frame.schema[col].dataType = GeometryType()
         elif datatype != GeometryType():
             raise TypeError(
                 "Non geometry data passed to GeoSeries constructor, "
-                f"received data of dtype '{datatype.typeName()}'"
+                f"received data of dtype '{datatype.typeName()}' for col '{col}'"
             )
 
         if crs:
@@ -630,6 +649,8 @@ class GeoSeries(GeoFrame, pspd.Series):
         # 0 indicates no srid in sedona
         new_epsg = crs.to_epsg() if crs else 0
         col = self.get_first_geometry_column()
+        col = self._get_col_name()
+        print("set_crs: _get_col_name", col)
 
         select = f"ST_SetSRID(`{col}`, {new_epsg})"
 
@@ -735,23 +756,30 @@ class GeoSeries(GeoFrame, pspd.Series):
 
         df = self._internal.spark_frame if df is None else df
 
+        # if isinstance(cols, str):
+        #     col = cols
+        #     data_type = df.schema[col].dataType  # TODO: probably fix me
+        #     # field = next((f for f in self._internal.data_fields if f.name == col), None)
+        #     # data_type = field.struct_field.dataType
+        #     if isinstance(data_type, BinaryType):
+        #         query = query.replace(f"`{cols}`", f"ST_GeomFromWKB(`{cols}`)")
+
+        #     rename = col if not rename else rename
+
+        # elif isinstance(cols, list):
+        #     for col in cols:
+        #         data_type = df.schema[col].dataType
+
+        #         if isinstance(data_type, BinaryType):
+        #             # the backticks here are important so we don't match strings that happen to be the same as the column name
+        #             query = query.replace(f"`{col}`", f"ST_GeomFromWKB(`{col}`)")
+
+        #     # must have rename for multiple columns since we don't know which name to default to
+        #     assert rename
+
         if isinstance(cols, str):
-            col = cols
-            data_type = df.schema[col].dataType
-            if isinstance(data_type, BinaryType):
-                query = query.replace(f"`{cols}`", f"ST_GeomFromWKB(`{cols}`)")
-
-            rename = col if not rename else rename
-
-        elif isinstance(cols, list):
-            for col in cols:
-                data_type = df.schema[col].dataType
-
-                if isinstance(data_type, BinaryType):
-                    # the backticks here are important so we don't match strings that happen to be the same as the column name
-                    query = query.replace(f"`{col}`", f"ST_GeomFromWKB(`{col}`)")
-
-            # must have rename for multiple columns since we don't know which name to default to
+            rename = rename if rename else cols
+        else:
             assert rename
 
         query = f"{query} as `{rename}`"
@@ -776,7 +804,9 @@ class GeoSeries(GeoFrame, pspd.Series):
             index_fields=index_fields,
             index_spark_columns=index_spark_columns,
             data_spark_columns=[scol_for(sdf, rename)],
-            data_fields=[self._internal.data_fields[0].copy(name=rename)],
+            data_fields=[
+                self._internal.data_fields[0].copy(name=rename)
+            ],  # TODO: look intto this
             column_label_names=[(rename,)],
         )
         ps_series = first_series(PandasOnSparkDataFrame(internal))
@@ -4247,6 +4277,21 @@ e": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [3
     # -----------------------------------------------------------------------------
     # # Utils
     # -----------------------------------------------------------------------------
+
+    def _get_col_name(self) -> str:
+        series_name = self.name if self.name else SPARK_DEFAULT_SERIES_NAME
+        return series_name
+        # spark_col_name = self._internal.spark_column_name_for((series_name,))  # somehow turned geometry1 into geometry2
+        # print("series_name", series_name, "spark_col_name", spark_col_name)
+        # return spark_col_name
+
+    def _get_data_type(self, col: str) -> DataType:
+        # data_field = next((f for f in self._internal.data_fields if f.name == col), None)
+        # assert data_field is not None, f"couldn't find field {col} in {self._internal.data_fields}"
+        # datatype = data_field.struct_field.dataType
+        print("_get_data_type", col, self._internal.data_spark_column_names)
+        datatype = self._internal.spark_type_for((col,))
+        return datatype
 
     def get_first_geometry_column(self) -> str:
         first_binary_or_geometry_col = next(

@@ -41,6 +41,7 @@ from pandas.api.extensions import register_extension_dtype
 from geopandas.geodataframe import crs_mismatch_error
 from geopandas.array import GeometryDtype
 from shapely.geometry.base import BaseGeometry
+from pyspark.pandas.internal import SPARK_DEFAULT_INDEX_NAME, NATURAL_ORDER_COLUMN_NAME
 
 register_extension_dtype(GeometryDtype)
 
@@ -346,21 +347,127 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
 
             # Here we are getting a ps.Series with the same underlying anchor (ps.Dataframe).
             # This is important so we don't unnecessarily try to perform operations on different dataframes
-            ps_series = pspd.DataFrame.__getitem__(self, column_name)
+            ps_series: pspd.Series = pspd.DataFrame.__getitem__(self, column_name)
+            # Note: although this is a series, ps_series._internal still has the whole dataframe
+
+            # Undo the potential __this_ and __that_ prefixes
+            data_fields = ps_series._internal.data_fields
+            column_labels = [(f.name,) for f in data_fields]
+
+            # internal = ps_series._internal.copy(
+            # column_labels=column_labels
+            # )
+            # from pyspark.pandas.utils import name_like_string, scol_for
+            # from pyspark.pandas.internal import SPARK_DEFAULT_INDEX_NAME, NATURAL_ORDER_COLUMN_NAME
+            # data_spark_columns = [
+            #     scol.alias(name_like_string(label))
+            #     for scol, label in zip(internal.data_spark_columns, column_labels)
+            # ]
+            # index_spark_columns = [scol_for(internal.spark_frame, SPARK_DEFAULT_INDEX_NAME), scol_for(internal.spark_frame, NATURAL_ORDER_COLUMN_NAME)]
+            # spark_frame = internal.spark_frame.select(data_spark_columns + index_spark_columns)
+            # internal._sdf = spark_frame
+            # ps_series = pspd.Series(pspd.DataFrame(internal), index=(column_name,))
+
+            from pyspark.pandas.utils import scol_for
+
+            # new_data_column_names = [f.name for f in data_fields]
+
+            def remove_prefix(col: str) -> str:
+                return col.replace("__this_", "").replace("__that_", "")
+
+            # Raw spark columns potentially with __this_ and __that_ prefixes
+            spark_data_columns = [
+                col
+                for col in ps_series._internal.spark_frame.columns
+                if col not in [SPARK_DEFAULT_INDEX_NAME, NATURAL_ORDER_COLUMN_NAME]
+            ]
+            new_spark_data_column_names = [
+                remove_prefix(col) for col in spark_data_columns
+            ]
+
+            print("BEFORE")
+            print("spark_data_columns", spark_data_columns)
+            print("new_spark_data_column_names", new_spark_data_column_names)
+
+            # TODO: how to remove the left __this_ column?
+            seen = {}
+            new_sdf = ps_series._internal.spark_frame
+            for i, new_name in enumerate(new_spark_data_column_names):
+                if new_name in seen:
+                    old_name = f"__this_{new_name}"  # spark_data_columns[i]
+                    drop_idx = seen[new_name]
+                    new_sdf = new_sdf.drop(old_name)
+                    new_spark_data_column_names.pop(drop_idx)
+                    spark_data_columns.pop(drop_idx)
+                    break
+                seen[new_name] = i
+
+            print("AFTER")
+            print("spark_data_columns", spark_data_columns)
+            print("new_spark_data_column_names", new_spark_data_column_names)
+
+            new_sdf = new_sdf.withColumnsRenamed(
+                {
+                    old: new
+                    for old, new in zip(spark_data_columns, new_spark_data_column_names)
+                }
+            )
+            print("new_sdf", new_sdf.columns, new_spark_data_column_names)
+            # data_spark_columns = [scol_for(new_sdf, col) for col in new_data_column_names]
+            # data_fields = [f.copy(name=new) for f, new in zip(ps_series._internal.data_fields, new_data_column_names)]
+            ps_data_col_names = ps_series._internal.data_spark_column_names
+            data_spark_columns = [
+                scol_for(new_sdf, remove_prefix(col)) for col in ps_data_col_names
+            ]
+            data_fields = [
+                f.copy(name=new)
+                for f, new in zip(
+                    ps_series._internal.data_fields, new_spark_data_column_names
+                )
+            ]
+            internal = ps_series._internal.copy(
+                spark_frame=new_sdf,
+                data_spark_columns=data_spark_columns,
+                column_label_names=[(col,) for col in ps_data_col_names],
+                data_fields=data_fields,
+            )
+            ps_series = pspd.Series(
+                pspd.DataFrame(internal), index=ps_series._column_label
+            )
+            # print("AFTER", ps_series._internal.spark_frame.schema.fieldNames())
+
+            # print("SPARK FRAME: ", ps_series._internal.spark_frame.schema.fieldNames())
+            # print("COLUMN_LABELS", column_labels)
+            # print("FIELD NAMES", ps_series._internal.data_spark_column_names)
+            # print("data_fields", data_fields)
+
+            # print("schema_field_names", [f.name for f in data_fields])
+            # print("datatypes: ", [f.struct_field.dataType for f in data_fields])
 
             try:
+                print("called GETITEM ", key, "ps_series.name", ps_series.name)
+                print("active geometry column name", self._geometry_column_name)
                 result = sgpd.GeoSeries(ps_series)
+                print(
+                    "result", result._internal.data_fields
+                )  # .spark_frame.schema.fieldNames())
                 first_idx = ps_series.first_valid_index()
                 if first_idx is not None:
-                    geom = ps_series.iloc[int(first_idx)]
+                    geom = ps_series.iloc[int(first_idx)]  # maybe use result here
+                    assert isinstance(geom, BaseGeometry), "object not a geom " + str(
+                        geom
+                    )
                     srid = shapely.get_srid(geom)
+                    print("getitem srid: ", srid)
 
                     # Shapely objects stored in the ps.Series retain their srid
                     # but the GeoSeries does not, so we manually re-set it here
                     if srid > 0:
                         result.set_crs(srid, inplace=True)
                 return result
-            except TypeError:
+            except TypeError as e:
+                print("e getitem: ", e)
+                # print(ps_series)
                 return ps_series
 
         # Handle list of column names
@@ -419,6 +526,7 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
         elif isinstance(data, GeoSeries):
             if data.crs is None:
                 data.crs = crs
+                # crs = None  # Don't need to set it again later
 
             # For each of these super().__init__() calls, we let pyspark decide which inputs are valid or not
             # instead of calling e.g assert not dtype ourselves.
@@ -450,6 +558,11 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
                 assert dtype is None
                 assert not copy
                 df = data
+                # Need to convert to gpd_df to pd_df to cast to object below
+                # pd_df = data
+                # pd_df = (
+                #     pd.DataFrame(data) if isinstance(data, gpd.GeoDataFrame) else data
+                # )
             else:
                 df = pd.DataFrame(
                     data=data,
@@ -457,9 +570,18 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
                     dtype=dtype,
                     copy=copy,
                 )
+            pd_df = pd.DataFrame(
+                gpd.GeoDataFrame(df)
+            )  # needed for below cast to work properly
+            # pd_df = gpd.GeoDataFrame(df)
 
-            # Spark complains if it's left as a geometry type
-            pd_df = df.astype(object)
+            # Spark errors if it's left as a geometry type
+            # pd_df = df
+            geom_type_cols = pd_df.select_dtypes(include=["geometry"]).columns
+            pd_df[geom_type_cols] = pd_df[geom_type_cols].astype(object)
+            print("pd_df", pd_df.dtypes)
+
+            # pd_df = df.astype(object)
 
             # initialize the parent class pyspark Dataframe with the pandas Dataframe
             super().__init__(
@@ -474,6 +596,10 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
             self._geometry_column_name = data._geometry_column_name
             if crs is not None and data.crs != crs:
                 raise ValueError(crs_mismatch_error)
+
+        # if crs is not None:
+        #     print("setting crs", crs, self.geometry.name)
+        #     self.crs = crs
 
     # ============================================================================
     # GEOMETRY COLUMN MANAGEMENT
@@ -508,6 +634,7 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
                 )
 
             raise AttributeError(msg)
+        print("get geometry", self._geometry_column_name)
         return self[self._geometry_column_name]
 
     def _set_geometry(self, col):
@@ -699,6 +826,10 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
 
         frame._geometry_column_name = geo_column_name
         frame[geo_column_name] = level
+        # __setitem__ may combine different frames, which will add __this_ and __that_ prefixes to column names
+        print("done SET GEOMETRY")
+        # print("field names level", level._internal.data_fields) # .spark_frame.schema.fieldNames())
+        # print("field names", frame._internal.data_fields) #spark_frame.schema.fieldNames())
 
         if not inplace:
             return frame
@@ -759,9 +890,12 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
 
             # The same .rename().set_geometry() logic errors for this case, so we do it manually instead
             ps_series = self._psser_for((geometry_col,)).rename(col)
+            # print("HERE: ps_series", ps_series._internal.spark_frame.schema.fieldNames())
+            # print("HERE: ps_series", ps_series._internal.data_fields)
             sdf = self.copy()
-            sdf[col] = ps_series
+            sdf[col] = sgpd.GeoSeries(ps_series)
             sdf = sdf.set_geometry(col)
+            # sdf = sdf.set_geometry(sgpd.GeoSeries(ps_series))
             return sdf
 
     # ============================================================================
@@ -858,12 +992,16 @@ class GeoDataFrame(GeoFrame, pspd.DataFrame):
 
     def _to_geopandas(self) -> gpd.GeoDataFrame:
         pd_df = self._internal.to_pandas_frame
+        pd_df = gpd.GeoDataFrame(
+            pd_df, geometry=self._geometry_column_name, crs=self._safe_get_crs()
+        )
 
         for col_name in pd_df.columns:
             series: pspd.Series = self[col_name]
             if isinstance(series, sgpd.GeoSeries):
                 # Use _to_geopandas instead of to_geopandas to avoid logging extra warnings
                 pd_df[col_name] = series._to_geopandas()
+                # print(type(pd_df[col_name]), type(series._to_geopandas()))
             else:
                 pd_df[col_name] = series.to_pandas()
 

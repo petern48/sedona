@@ -51,8 +51,12 @@ class TestDataframe(TestGeopandasBase):
         [
             [Point(x, x) for x in range(3)],
             {"geometry": [Point(x, x) for x in range(3)]},
-            pd.DataFrame([Point(x, x) for x in range(3)]),
-            gpd.GeoDataFrame([Point(x, x) for x in range(3)]),
+            pd.DataFrame(
+                {"geometry": [Point(x, x) for x in range(3)], "non-geom": [1, 2, 3]}
+            ),
+            gpd.GeoDataFrame(
+                {"geometry": [Point(x, x) for x in range(3)], "non-geom": [4, 5, 6]}
+            ),
             pd.Series([Point(x, x) for x in range(3)]),
             gpd.GeoSeries([Point(x, x) for x in range(3)]),
         ],
@@ -62,7 +66,7 @@ class TestDataframe(TestGeopandasBase):
             sgpd_df = GeoDataFrame(obj)
         check_geodataframe(sgpd_df)
 
-    # These need to be separate to make sure Sedona's Geometry UDTs have been registered
+    # These need to be defined inside the function to ensure Sedona's Geometry UDTs have been registered
     def test_constructor_pandas_on_spark(self):
         for obj in [
             ps.DataFrame([Point(x, x) for x in range(3)]),
@@ -376,11 +380,13 @@ class TestDataframe(TestGeopandasBase):
     def test_to_json(self):
         import json
 
-        d = {"col1": ["name1", "name2"], "geometry": [Point(1, 2), Point(2, 1)]}
+        # d = {"col1": ["name1", "name2"], "geometry": [Point(1, 2), Point(2, 1)]}
+        d = {"geometry": [Point(1, 2), Point(2, 1)], "col1": ["name1", "name2"]}
 
         # Currently, adding the crs information later requires us to join across partitions
         with self.ps_allow_diff_frames():
             gdf = GeoDataFrame(d, crs="EPSG:3857")
+        print("test: ", gdf.geometry.dtype)  # type object instead of geometry
 
         result = gdf.to_json()
 
