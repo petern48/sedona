@@ -199,12 +199,20 @@ public class Functions {
     return Math.sqrt(closest);
   }
 
-  public static double azimuth(Geometry left, Geometry right) {
+  public static Double azimuth(Geometry left, Geometry right) {
     Coordinate leftCoordinate = left.getCoordinate();
     Coordinate rightCoordinate = right.getCoordinate();
     double deltaX = rightCoordinate.x - leftCoordinate.x;
     double deltaY = rightCoordinate.y - leftCoordinate.y;
+
+    // If the two points are the same, return null
+    if (deltaX == 0 && deltaY == 0) {
+      System.out.println("Points are identical; azimuth is null.");
+      return null;
+    }
+
     double azimuth = Math.atan2(deltaX, deltaY);
+    System.out.println(deltaX + " " + deltaY + " not null " + azimuth);
     return azimuth < 0 ? azimuth + (2 * Math.PI) : azimuth;
   }
 

@@ -591,7 +591,7 @@ POINT ZM(1 1 1 1)
 
 ## ST_Azimuth
 
-Introduction: Returns Azimuth for two given points in radians null otherwise.
+Introduction: Returns the azimuth in radians of the target point from pointA to pointB, or NULL if the two points are coincident. The azimuth angle is a positive clockwise angle referenced from the positive Y axis (geometry) or the North meridian (geography): North = 0; Northeast = π/4; East = π/2; Southeast = 3π/4; South = π; Southwest 5π/4; West = 3π/2; Northwest = 7π/4.
 
 Format: `ST_Azimuth(pointA: Point, pointB: Point)`
 

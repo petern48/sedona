@@ -3477,6 +3477,14 @@ public class FunctionsTest extends TestBase {
   }
 
   @Test
+  public void azimuthSamePoint() {
+    Point point1 = GEOMETRY_FACTORY.createPoint(new Coordinate(1, 1));
+    Point point2 = GEOMETRY_FACTORY.createPoint(new Coordinate(1, 1));
+    Double actual = Functions.azimuth(point1, point2);
+    assertNull(actual);
+  }
+
+  @Test
   public void angleInvalidEmptyGeom() {
     Point point1 = GEOMETRY_FACTORY.createPoint(new Coordinate(3, 5));
     Point point2 = GEOMETRY_FACTORY.createPoint();

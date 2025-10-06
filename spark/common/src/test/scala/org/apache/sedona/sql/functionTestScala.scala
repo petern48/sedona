@@ -1246,6 +1246,18 @@ class functionTestScala
         .collect()
         .toList should contain theSameElementsAs List(42.27368900609374, 222.27368900609375,
         270.00, 90.0, 180.0, 0.0)
+
+      Given("Given two identical points")
+
+      var actual =
+        sparkSession
+          .sql("SELECT ST_Azimuth(ST_GeomFromWKT('POINT (1 2)'),ST_GeomFromWKT('POINT (1 2)'))")
+          .first()
+          .get(0)
+
+      Then("The azimuth should be null")
+
+      assert(actual == null)
     }
 
     it("Should pass ST_X") {

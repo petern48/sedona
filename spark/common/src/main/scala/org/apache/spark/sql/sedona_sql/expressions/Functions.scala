@@ -573,6 +573,9 @@ private[apache] case class ST_LineMerge(inputExpressions: Seq[Expression])
 private[apache] case class ST_Azimuth(inputExpressions: Seq[Expression])
     extends InferredExpression(Functions.azimuth _) {
 
+  // override def nullable: Boolean = true
+  // override def dataType: DataType = DoubleType
+
   protected def withNewChildrenInternal(newChildren: IndexedSeq[Expression]) = {
     copy(inputExpressions = newChildren)
   }
