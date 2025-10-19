@@ -2691,6 +2691,8 @@ class functionTestScala
     assert(functionDf.first().get(0) == null)
     functionDf = sparkSession.sql("select ST_SetSRID(null, 4326)")
     assert(functionDf.first().get(0) == null)
+    functionDf = sparkSession.sql("select GeometryType(null)")
+    assert(functionDf.first().get(0) == null)
     functionDf = sparkSession.sql("select ST_GeometryType(null)")
     assert(functionDf.first().get(0) == null)
     functionDf = sparkSession.sql("select ST_LineMerge(null)")

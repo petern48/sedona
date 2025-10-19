@@ -1798,7 +1798,11 @@ public class Functions {
   }
 
   public static String geometryTypeWithMeasured(Geometry geometry) {
-    String geometryType = geometry.getGeometryType().toUpperCase();
+    String geometryType = geometry.getGeometryType();
+    if (geometryType == null) {
+      return null;
+    }
+    geometryType = geometryType.toUpperCase();
     if (GeomUtils.isMeasuredGeometry(geometry)) {
       geometryType += "M";
     }
