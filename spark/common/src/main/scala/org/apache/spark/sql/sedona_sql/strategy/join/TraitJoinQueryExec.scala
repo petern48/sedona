@@ -25,9 +25,11 @@ import org.apache.sedona.core.utils.SedonaConf
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeRowJoiner
-import org.apache.spark.sql.catalyst.expressions.{Attribute, BindReferences, Expression, Predicate, UnsafeRow}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, BindReferences, Expression, GenericInternalRow, Predicate, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.catalyst.plans.{InnerLike, JoinType, LeftOuter, RightOuter}
 import org.locationtech.jts.geom.Geometry
+import java.util.Arrays
 
 trait TraitJoinQueryExec extends TraitJoinQueryBase {
   self: SparkPlan =>
@@ -36,10 +38,22 @@ trait TraitJoinQueryExec extends TraitJoinQueryBase {
   val right: SparkPlan
   val leftShape: Expression
   val rightShape: Expression
+  val joinType: JoinType
   val spatialPredicate: SpatialPredicate
   val extraCondition: Option[Expression]
 
-  override def output: Seq[Attribute] = left.output ++ right.output
+  override def output: Seq[Attribute] = {
+    joinType match {
+      case _: InnerLike =>
+        left.output ++ right.output
+      case LeftOuter =>
+        left.output ++ right.output.map(_.withNullability(true))
+      case RightOuter =>
+        left.output.map(_.withNullability(true)) ++ right.output
+      case _ =>
+        left.output ++ right.output
+    }
+  }
 
   override protected def doExecute(): RDD[InternalRow] = {
     val boundLeftShape = BindReferences.bindReference(leftShape, left.output)
@@ -122,24 +136,118 @@ trait TraitJoinQueryExec extends TraitJoinQueryBase {
 
     logDebug(s"Join result has ${matchesRDD.count()} rows")
 
-    matchesRDD.mapPartitions { iter =>
-      val joinRow = {
-        val joiner = GenerateUnsafeRowJoiner.create(left.schema, right.schema)
-        (l: UnsafeRow, r: UnsafeRow) => joiner.join(l, r)
+    // Helper class for using row bytes as map keys
+    case class RowKey(bytes: Array[Byte]) {
+      override def equals(obj: Any): Boolean = obj match {
+        case other: RowKey => Arrays.equals(bytes, other.bytes)
+        case _ => false
       }
+      override def hashCode(): Int = Arrays.hashCode(bytes)
+    }
 
-      val joined = iter.map { case (l, r) =>
-        val leftRow = l.getUserData.asInstanceOf[UnsafeRow]
-        val rightRow = r.getUserData.asInstanceOf[UnsafeRow]
-        joinRow(leftRow, rightRow)
-      }
-
+    // Helper to apply extra condition filter (shared by all join types)
+    def filterWithExtraCondition(rows: Iterator[InternalRow]): Iterator[InternalRow] = {
       extraCondition match {
         case Some(condition) =>
           val boundCondition = Predicate.create(condition, output)
-          joined.filter(row => boundCondition.eval(row))
-        case None => joined
+          rows.filter(row => boundCondition.eval(row))
+        case None => rows
       }
+    }
+
+    joinType match {
+      case _: InnerLike =>
+        // Inner join: emit only matching pairs
+        matchesRDD.mapPartitions { iter =>
+          val joinRow = {
+            val joiner = GenerateUnsafeRowJoiner.create(left.schema, right.schema)
+            (l: UnsafeRow, r: UnsafeRow) => joiner.join(l, r)
+          }
+          val joined = iter.map { case (l, r) =>
+            val leftRow = l.getUserData.asInstanceOf[UnsafeRow]
+            val rightRow = r.getUserData.asInstanceOf[UnsafeRow]
+            joinRow(leftRow, rightRow)
+          }
+
+          // extraCondition match {
+          //   case Some(condition) =>
+          //     val boundCondition = Predicate.create(condition, output)
+          //     joined.filter(row => boundCondition.eval(row))
+          //   case None => joined
+          // }
+          filterWithExtraCondition(joined)
+        }
+      case LeftOuter =>
+        // Left outer join: emit all left rows, with NULLs for unmatched rows
+        // Build a map of left row bytes -> list of matching right rows
+        val matchesByLeftRow = matchesRDD
+          .map { case (l, r) =>
+            val leftRow = l.getUserData.asInstanceOf[UnsafeRow]
+            val rightRow = r.getUserData.asInstanceOf[UnsafeRow]
+            (RowKey(leftRow.getBytes), rightRow)
+          }
+          .groupByKey()
+          .collectAsMap()
+
+        // Broadcast the matches map
+        val broadcastMatches = sparkContext.broadcast(matchesByLeftRow)
+        val nullRow = UnsafeProjection.create(right.output, right.output)(
+          new GenericInternalRow(right.output.length))
+
+        leftResultsRaw.mapPartitions { leftIter =>
+          val joinRow = {
+            val joiner = GenerateUnsafeRowJoiner.create(left.schema, right.schema)
+            (l: UnsafeRow, r: UnsafeRow) => joiner.join(l, r)
+          }
+          val matches = broadcastMatches.value
+
+          val joined = leftIter.flatMap { leftRow =>
+            matches.get(RowKey(leftRow.getBytes)) match {
+              case Some(rightRows) =>
+                rightRows.iterator.map(rightRow => joinRow(leftRow, rightRow))
+              case None =>
+                // No matches: emit NULL for right side
+                Iterator.single(joinRow(leftRow, nullRow))
+            }
+          }
+          filterWithExtraCondition(joined)
+        }
+      case RightOuter =>
+        // Right outer join: emit all right rows, with NULLs for unmatched rows
+        val matchesByRightRow = matchesRDD
+          .map { case (l, r) =>
+            val leftRow = l.getUserData.asInstanceOf[UnsafeRow]
+            val rightRow = r.getUserData.asInstanceOf[UnsafeRow]
+            (RowKey(rightRow.getBytes), leftRow)
+          }
+          .groupByKey()
+          .collectAsMap()
+
+        val broadcastMatches = sparkContext.broadcast(matchesByRightRow)
+        val nullRow = UnsafeProjection.create(left.output, left.output)(
+          new GenericInternalRow(left.output.length))
+
+        rightResultsRaw.mapPartitions { rightIter =>
+          val joinRow = {
+            val joiner = GenerateUnsafeRowJoiner.create(left.schema, right.schema)
+            (l: UnsafeRow, r: UnsafeRow) => joiner.join(l, r)
+          }
+          val matches = broadcastMatches.value
+
+          val joined = rightIter.flatMap { rightRow =>
+            matches.get(RowKey(rightRow.getBytes)) match {
+              case Some(leftRows) =>
+                leftRows.iterator.map(leftRow => joinRow(leftRow, rightRow))
+              case None =>
+                // No matches: emit NULL for left side
+                Iterator.single(joinRow(nullRow, rightRow))
+            }
+          }
+          filterWithExtraCondition(joined)
+        }
+      case x: Any =>
+        throw new IllegalArgumentException(
+          s"TraitJoinQueryExec should not take $x as the JoinType")
     }
   }
 

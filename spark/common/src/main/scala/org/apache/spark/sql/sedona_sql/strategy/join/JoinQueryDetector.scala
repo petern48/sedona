@@ -530,7 +530,7 @@ class JoinQueryDetector(sparkSession: SparkSession) extends SparkStrategy {
       spatialPredicate: SpatialPredicate,
       extraCondition: Option[Expression] = None): Seq[SparkPlan] = {
 
-    if (joinType != Inner) {
+    if (joinType != Inner && joinType != LeftOuter && joinType != RightOuter) {
       return Nil
     }
 
@@ -547,6 +547,7 @@ class JoinQueryDetector(sparkSession: SparkSession) extends SparkStrategy {
           planLater(right),
           a,
           b,
+          joinType,
           spatialPredicate,
           extraCondition) :: Nil
       case Some((_, _, true)) =>
@@ -558,6 +559,7 @@ class JoinQueryDetector(sparkSession: SparkSession) extends SparkStrategy {
           planLater(right),
           b,
           a,
+          joinType,
           invSpatialPredicate,
           extraCondition) :: Nil
       case None =>
@@ -623,7 +625,7 @@ class JoinQueryDetector(sparkSession: SparkSession) extends SparkStrategy {
       isGeography: Boolean,
       extraCondition: Option[Expression] = None): Seq[SparkPlan] = {
 
-    if (joinType != Inner) {
+    if (joinType != Inner && joinType != LeftOuter && joinType != RightOuter) {
       return Nil
     }
 
@@ -641,6 +643,7 @@ class JoinQueryDetector(sparkSession: SparkSession) extends SparkStrategy {
               planLater(right),
               leftShape,
               rightShape,
+              joinType,
               distance,
               distanceBoundToLeft = true,
               spatialPredicate,
@@ -653,6 +656,7 @@ class JoinQueryDetector(sparkSession: SparkSession) extends SparkStrategy {
               planLater(right),
               leftShape,
               rightShape,
+              joinType,
               distance,
               distanceBoundToLeft = false,
               spatialPredicate,
