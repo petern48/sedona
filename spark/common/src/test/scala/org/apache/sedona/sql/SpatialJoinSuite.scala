@@ -282,6 +282,142 @@ class SpatialJoinSuite extends TestBaseScala with TableDrivenPropertyChecks {
     }
   }
 
+  describe("Sedona-SQL Left Outer Range Join Test") {
+    val rangeJoinPredicates = Table(
+      "join predicate",
+      "ST_Intersects(df1.geom, df2.geom)",
+      "ST_Contains(df1.geom, df2.geom)",
+      "ST_Contains(df2.geom, df1.geom)",
+      "ST_Within(df1.geom, df2.geom)",
+      "ST_Within(df2.geom, df1.geom)",
+      "ST_Covers(df1.geom, df2.geom)",
+      "ST_CoveredBy(df1.geom, df2.geom)")
+
+    forAll(rangeJoinPredicates) { joinPredicate =>
+      it(s"should use RangeJoinExec for LEFT JOIN with $joinPredicate") {
+        withConf(Map(spatialJoinPartitionSideConfKey -> "left")) {
+          val result =
+            sparkSession.sql(s"SELECT df1.id, df2.id FROM df1 LEFT JOIN df2 ON $joinPredicate")
+          assert(isUsingRangeJoin(result))
+          // Verify all left rows are preserved
+          val leftIds = result
+            .select("df1.id")
+            .filter(col("df1.id").isNotNull)
+            .distinct()
+            .collect()
+            .map(_.getInt(0))
+          val expectedLeftIds =
+            sparkSession.sql("SELECT id FROM df1").collect().map(_.getInt(0)).sorted
+          assert(leftIds.sorted === expectedLeftIds)
+        }
+      }
+
+      it(s"should preserve all left rows in LEFT JOIN with $joinPredicate") {
+        withConf(Map(spatialJoinPartitionSideConfKey -> "left")) {
+          val result =
+            sparkSession.sql(s"SELECT df1.id, df2.id FROM df1 LEFT JOIN df2 ON $joinPredicate")
+          val leftCount = sparkSession.sql("SELECT COUNT(*) FROM df1").collect().head.getLong(0)
+          val resultCount = result.select("df1.id").distinct().count()
+          assert(resultCount === leftCount, "All left rows should be preserved")
+        }
+      }
+
+      it(s"should have NULL right values for unmatched left rows with $joinPredicate") {
+        withConf(Map(spatialJoinPartitionSideConfKey -> "left")) {
+          val result =
+            sparkSession.sql(s"SELECT df1.id, df2.id FROM df1 LEFT JOIN df2 ON $joinPredicate")
+          // Get inner join result for comparison
+          val innerResult =
+            sparkSession.sql(s"SELECT df1.id, df2.id FROM df1 JOIN df2 ON $joinPredicate")
+          val innerLeftIds =
+            innerResult.select("df1.id").distinct().collect().map(_.getInt(0)).toSet
+          val allLeftIds = sparkSession.sql("SELECT id FROM df1").collect().map(_.getInt(0)).toSet
+          val unmatchedLeftIds = allLeftIds -- innerLeftIds
+
+          // Verify unmatched left rows have NULL right values
+          if (unmatchedLeftIds.nonEmpty) {
+            val unmatchedRows = result.filter(col("df1.id").isin(unmatchedLeftIds.toSeq: _*))
+            val nullCount = unmatchedRows.filter(col("df2.id").isNull).count()
+            assert(
+              nullCount === unmatchedRows.count(),
+              "Unmatched rows should have NULL right values")
+          }
+        }
+      }
+
+      it(s"should match inner join results for matched rows with $joinPredicate") {
+        withConf(Map(spatialJoinPartitionSideConfKey -> "left")) {
+          val leftResult =
+            sparkSession.sql(s"SELECT df1.id, df2.id FROM df1 LEFT JOIN df2 ON $joinPredicate")
+          val innerResult =
+            sparkSession.sql(s"SELECT df1.id, df2.id FROM df1 JOIN df2 ON $joinPredicate")
+
+          // Get matched rows from left join (non-null right values)
+          val leftMatched = leftResult
+            .filter(col("df2.id").isNotNull)
+            .collect()
+            .map(row => (row.getInt(0), row.getInt(1)))
+            .sorted
+          val innerMatched = innerResult
+            .collect()
+            .map(row => (row.getInt(0), row.getInt(1)))
+            .sorted
+
+          assert(leftMatched === innerMatched, "Matched rows should be identical to inner join")
+        }
+      }
+    }
+
+    it("should use RangeJoinExec for LEFT JOIN with ST_Intersects and preserve all left rows") {
+      withConf(Map(spatialJoinPartitionSideConfKey -> "left")) {
+        val result = sparkSession.sql(
+          "SELECT df1.id, df2.id FROM df1 LEFT JOIN df2 ON ST_Intersects(df1.geom, df2.geom)")
+        assert(isUsingRangeJoin(result))
+
+        val leftCount = sparkSession.sql("SELECT COUNT(*) FROM df1").collect().head.getLong(0)
+        val resultCount = result.select("df1.id").distinct().count()
+        assert(resultCount === leftCount)
+
+        // Verify result count is at least left count (can be more due to multiple matches)
+        assert(result.count() >= leftCount)
+      }
+    }
+
+    it("should handle LEFT JOIN with right side as dominant partition side") {
+      withConf(Map(spatialJoinPartitionSideConfKey -> "right")) {
+        val result = sparkSession.sql(
+          "SELECT df1.id, df2.id FROM df1 LEFT JOIN df2 ON ST_Intersects(df1.geom, df2.geom)")
+        assert(isUsingRangeJoin(result))
+
+        val leftCount = sparkSession.sql("SELECT COUNT(*) FROM df1").collect().head.getLong(0)
+        val resultCount = result.select("df1.id").distinct().count()
+        assert(resultCount === leftCount, "All left rows should be preserved")
+      }
+    }
+
+    it("should work with LEFT JOIN and extra conditions") {
+      withConf(Map(spatialJoinPartitionSideConfKey -> "left")) {
+        val result = sparkSession.sql("""
+            |SELECT df1.id, df2.id FROM df1 LEFT JOIN df2 ON
+            |ST_Intersects(df1.geom, df2.geom) AND df1.id > df2.id
+            |""".stripMargin)
+        assert(isUsingRangeJoin(result))
+
+        val leftCount = sparkSession.sql("SELECT COUNT(*) FROM df1").collect().head.getLong(0)
+        val resultCount = result.select("df1.id").distinct().count()
+        assert(
+          resultCount === leftCount,
+          "All left rows should be preserved even with extra conditions")
+      }
+    }
+  }
+
+  private def isUsingRangeJoin(df: DataFrame): Boolean = {
+    df.queryExecution.executedPlan.collect { case _: RangeJoinExec =>
+      true
+    }.nonEmpty
+  }
+
   private def withOptimizationMode(mode: String)(body: => Unit): Unit = {
     withConf(Map("sedona.join.optimizationmode" -> mode))(body)
   }
