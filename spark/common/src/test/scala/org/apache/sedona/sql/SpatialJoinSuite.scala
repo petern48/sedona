@@ -383,6 +383,22 @@ class SpatialJoinSuite extends TestBaseScala with TableDrivenPropertyChecks {
       }
     }
 
+    // it("should handle LEFT JOIN with empty right table") {
+    //   withConf(Map(spatialJoinPartitionSideConfKey -> "left")) {
+    //     val result = sparkSession.sql(
+    //       "SELECT df1.id, dfEmpty.id FROM df1 LEFT JOIN dfEmpty ON ST_Intersects(df1.geom, dfEmpty.geom)")
+    //     assert(isUsingRangeJoin(result))
+
+    //     val leftCount = sparkSession.sql("SELECT COUNT(*) FROM df1").collect().head.getLong(0)
+    //     val resultCount = result.count()
+    //     assert(resultCount === leftCount, "Should preserve all left rows when right is empty")
+
+    //     // All right values should be NULL
+    //     val nullCount = result.filter(col("dfEmpty.id").isNull).count()
+    //     assert(nullCount === leftCount, "All right values should be NULL")
+    //   }
+    // }
+
     it("should handle LEFT JOIN with right side as dominant partition side") {
       withConf(Map(spatialJoinPartitionSideConfKey -> "right")) {
         val result = sparkSession.sql(

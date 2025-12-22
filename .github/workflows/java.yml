@@ -20,7 +20,7 @@ name: Scala and Java build
 on:
   push:
     branches:
-      - master
+      - '*' # master
     paths:
       - 'common/**'
       - 'spark/**'
@@ -59,7 +59,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - spark: 4.0.0
